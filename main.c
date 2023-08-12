@@ -1,378 +1,256 @@
 /*main.c*/
 
 //
-// Program to open a database and "execute" select queries 
-// against this database. For now we just output the database
-// schema, the AST for each query, and the first 5 lines
-// of the references table.
-//
-// Prof. Joe Hummel (solution)
+// Jeremy Chung
+// CS 211
+// Winter 2023
 // Northwestern University
-// CS 211, Winter 2023
 //
 
+// other header files
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdbool.h>  // true, false
-#include <string.h>   // strcpy, strcat
-#include <assert.h>   // assert
+#include <stdbool.h>
+#include <string.h>
 
-#include "tokenqueue.h"
-#include "scanner.h"
-#include "parser.h"
-#include "ast.h"
-#include "database.h"
-#include "util.h"
+// local header files
 #include "analyzer.h"
-#include "execute.h"
+#include "parser.h"
+#include "scanner.h"
+#include "token.h"
+#include "database.h" 
+#include "util.h"
 
-/*
-//
-// print_schema
-//
-// prints the database meta-data to stdout (console).
-//
-static void print_schema(struct Database* db)
-{
-  if (db == NULL) panic("db is NULL (print_schema)");
+// for ast enums
+char *functions[5] = {"MIN", "MAX", "SUM", "AVG", "COUNT"}; 
+char *expressions[7] = {"<", "<=", ">", ">=", "=", "<>", "like"};
 
-  printf("**DATABASE SCHEMA**\n");
-
-  //
-  // debugging: dump all the meta-data:
-  //
-  printf("Database: %s\n", db->name);
-
-  for (int t = 0; t < db->numTables; t++)
-  {
-    printf("Table: %s\n", db->tables[t].name);
-    printf("  Record size: %d\n", db->tables[t].recordSize);
-
-    for (int c = 0; c < db->tables[t].numColumns; c++)
-    {
-      printf("  Column: %s, ", db->tables[t].columns[c].name);
-
-      if (db->tables[t].columns[c].colType == COL_TYPE_INT)
-        printf("int, ");
-      else if (db->tables[t].columns[c].colType == COL_TYPE_REAL)
-        printf("real, ");
-      else
-        printf("string, ");
-
-      if (db->tables[t].columns[c].indexType == COL_NON_INDEXED)
-        printf("non-indexed\n");
-      else if (db->tables[t].columns[c].indexType == COL_INDEXED)
-        printf("indexed\n");
-      else
-        printf("unique indexed\n");
+// takes in a query structure pointer and database structure pointer and returns nothing.
+// prints the first 5 lines of data from a table
+void execute_query(struct QUERY *qu, struct Database *od){
+  struct TableMeta* dbtables = od->tables; 
+  struct TableMeta table; 
+  
+  char* tableName = qu->q.select->table; 
+  for(int i = 0; i < od->numTables; i++){ //loops through all the tables in the database
+    if(icmpStrings(tableName, dbtables[i].name) == 0){ // checks if the user table name is the same as the database tablename
+      table = od->tables[i]; 
+      tableName = dbtables[i].name; 
+      break;
     }
   }
 
-  printf("**END OF DATABASE SCHEMA**\n");
-}
+  // combines all the elements of the filename into one string 
+  char filename[DATABASE_MAX_ID_LENGTH + 1] = "";
+  strcat(filename, od->name); 
+  strcat(filename, "/");
+  strcat(filename, tableName);
+  strcat(filename, ".data");
 
-
-//
-// print_function
-//
-// Given an enum value, prints the function name.
-//
-static void print_function(int function)
-{
-  switch (function)
-  {
-	case NO_FUNCTION:
-    //nothing
-	  break;
-	  
-    case MIN_FUNCTION:
-      printf("MIN");
-      break;
-
-    case MAX_FUNCTION:
-      printf("MAX");
-      break;
-
-    case SUM_FUNCTION:
-      printf("SUM");
-      break;
-
-    case AVG_FUNCTION:
-      printf("AVG");
-      break;
-
-    case COUNT_FUNCTION:
-      printf("COUNT");
-      break;
-	  
-	default:
-	  panic("unknown function in print_function");
-  }
-}
-
-
-//
-// print_ast
-//
-// Prints the query AST to stdout (console).
-//
-static void print_ast(struct QUERY* query)
-{
-  if (query == NULL) panic("query is NULL (print_ast)");
-
-  if (query->queryType != SELECT_QUERY)
-  {
-    printf("**INTERNAL ERROR: analyzer_print() only supports SELECT queries.\n");
-    return;
+  // opens the file and errors if the file cannot be found
+  FILE *file = fopen(filename, "r"); 
+  if(file == NULL) { 
+    printf("ERROR: File not found.\n");
+    exit(-1);
   }
 
-  // 
-  // select query:
-  // 
-  struct SELECT* select = query->q.select;  // alias for less typing:
+  // dynamically allocates enough memory
+  int bufferSize = (table.recordSize + 3); 
+  char *buffer = (char*) malloc(sizeof(char) * bufferSize);
+  if(buffer == NULL){
+    panic("out of memory"); 
+  }
 
+  // loops 5 times to print the 5 lines
+  for(int i = 0; i < 5; i++) { 
+    if(fgets(buffer, bufferSize, file) == NULL){ // checks if null
+      break;
+    }
+    printf("%s", buffer);
+  }
+  
+}
+
+// takes in a query structure pointer and returns nothing
+// prints a representation of the abstract syntax tree.
+void print_ast(struct QUERY* qu){
   printf("**QUERY AST**\n");
-
+  
+  struct SELECT* select = qu->q.select; 
   printf("Table: %s\n", select->table);
 
-  //
-  // First we'll walk down the linked-list of columns
-  // and output tablename.columnname, along with any
-  // function that might be applied:
-  //
-  struct COLUMN* cur = select->columns;
-
-  while (cur != NULL)
-  {
-    printf("Select column: ");
-
-    if (cur->function != NO_FUNCTION)
-	{
-      print_function(cur->function);
-      printf("(");
-    }
-
-    printf("%s.%s", cur->table, cur->name);
-
-    if (cur->function != NO_FUNCTION)  // closing ) if a function
-      printf(")");
-
-    printf("\n");
-
-    cur = cur->next;
-  }
-
-  //
-  // is there a join clause?  if so, print...
-  //
-  if (select->join == NULL)
-  {
+  // COLUMNS
+  struct COLUMN* columns = select->columns; 
+  while(true){  // traverses the linked list through all the columns in the query
+      if (columns == NULL){
+         break; 
+      }
+      if(columns->function != -1){ // checks in the column contains a function and prints with the appropriate function
+        printf("Select column: %s(%s.%s)\n", functions[columns->function], select->table, columns->name);
+      }
+      else{ // otherwise print normally 
+        printf("Select column: %s.%s\n", columns->table, columns->name);
+      }
+      columns = columns->next; 
+   }
+  
+  //JOIN
+  struct JOIN* join = select->join; 
+  if (join == NULL){
     printf("Join (NULL)\n");
   }
-  else
-  {
-    printf("Join %s On ", select->join->table);
-    printf("%s.%s = ", select->join->left->table, select->join->left->name);
-    printf("%s.%s\n", select->join->right->table, select->join->right->name);
-  }//join
+  else{
+    struct COLUMN* cl = join->left; 
+    struct COLUMN* cr = join->right; 
+    printf("Join %s On %s.%s = %s.%s\n", join->table, cl->table, cl->name, cr->table, cr->name); // print the join part of the query
+  }
 
-  //
-  // is there a where clause?  If so, print...
-  //
-  if (select->where == NULL)
-  {
+  struct WHERE* where = select->where; 
+  if (where == NULL){
     printf("Where (NULL)\n");
   }
-  else
-  {
-    printf("Where %s.%s ", select->where->expr->column->table, select->where->expr->column->name);
-
-    //
-	// which operator?
-	//
-	assert(EXPR_LT == 0);
-	
-	char* operators[] = { "<", "<=", ">", ">=", "=", "<>", "like" };
-	
-	printf("%s", operators[select->where->expr->operator]);
-	
-    //
-	// String literals we have to surround with ' or ", 
-	// otherwise we just print the literal as is:
-	//
-    if (select->where->expr->litType == STRING_LITERAL)
-    {
-      char* cp = strchr(select->where->expr->value, '\'');  // contain '?
-
-      if (cp == NULL)  // does not contain '
-        printf(" '%s'\n", select->where->expr->value);
-      else
-        printf(" \"%s\"\n", select->where->expr->value);
+  else{
+    struct EXPR* expr = where->expr; 
+    struct COLUMN* exprCol = expr->column; 
+    if (expr->litType == 2){ // checks if the expr structure is a string
+      if (strchr(expr->value, '\'')){ // checks if the string contains single quotes
+        printf("Where %s.%s %s \"%s\"\n", exprCol->table, exprCol->name, expressions[expr->operator], expr->value); // if the expr structure has single quotes, print with double quotes
+      }
+      else {
+        printf("Where %s.%s %s \'%s\'\n", exprCol->table, exprCol->name, expressions[expr->operator], expr->value); // else print with single quotes
+      }
     }
-    else // int or real
-    {
-      printf(" %s\n", select->where->expr->value);
+    else {
+      printf("Where %s.%s %s %s\n", exprCol->table, exprCol->name, expressions[expr->operator], expr->value); // normal printing of the where part of the query 
     }
-  }//where
+  }
 
-  //
-  // is there an orderby clause? IF so, print...
-  //
-  if (select->orderby == NULL)
-  {
+  
+  struct ORDERBY* orderby = select->orderby; 
+  if (orderby == NULL){
     printf("Order By (NULL)\n");
   }
-  else
-  {
-    printf("Order By ");
-
-    //
-	// there can be a function on the order by column:
-	//
-	if (select->orderby->column->function != NO_FUNCTION)
-	{
-      print_function(select->orderby->column->function);
-      printf("(");
+  else{
+    if(orderby->column->function != -1){ // checks if there's a function in the column
+       printf("Order By %s(%s.%s) ", functions[orderby->column->function], orderby->column->table, orderby->column->name); 
+    }
+    else{
+      printf("Order By %s.%s ", orderby->column->table, orderby->column->name);
     }
 
-    printf("%s.%s",
-      select->orderby->column->table,
-      select->orderby->column->name);
-
-    if (select->orderby->column->function != NO_FUNCTION)  // closing )
-      printf(")");
-
-    if (select->orderby->ascending)
-      printf(" ASC\n");
-    else
-      printf(" DESC\n");
-  }//orderby
-
-  //
-  // limit clause? If so...
-  //
-  if (select->limit == NULL)
-  {
+    if(orderby->ascending){ // checks if ascending or descending 
+      printf("ASC\n"); 
+    }
+    else{
+      printf("DESC\n");
+    }
+  }
+  
+  
+  // prints the limit part of the query if any exists
+  struct LIMIT* limit = select->limit; 
+  if (limit == NULL){
     printf("Limit (NULL)\n");
   }
-  else
-  {
-    printf("Limit %d\n", select->limit->N);
+  else{
+    printf("Limit %d\n", limit->N);
   }
 
-  //
-  // into clause?
-  //
-  if (select->into == NULL)
-  {
+  // prints the into part of the query if any exists
+  struct INTO* into = select->into; 
+  if (into == NULL){
     printf("Into (NULL)\n");
   }
-  else
-  {
-    printf("Into %s\n", select->into->table);;
+  else{
+    printf("Into %s\n", into->table);
   }
 
   printf("**END OF QUERY AST**\n");
 }
-*/
 
 
-//
-// main
-//
-// Prompt for database, open, and then input and
-// execute SimpleSQL queries...
-//
-int main()
-{
-  struct Database* db = NULL;
+// takes in a database structure pointer and returns nothing
+// prints out a representation of the database schema
+void print_schema(struct Database *od){
+  printf("**DATABASE SCHEMA**\n");
+  printf("Database: %s\n", od->name);
+  
+  struct TableMeta* table = od->tables; 
+  for(int i = 0; i < od->numTables; i++){ // loops through all the tables in the database
+    printf("Table: %s\n", table[i].name); 
+    printf("  Record Size: %d\n", table[i].recordSize);
+    
+    struct ColumnMeta* columns = table[i].columns; 
+    for(int j = 0; j < table[i].numColumns; j++){ // loops through all the columns in each table
+      char colType[7];
+      char indexType[15];
 
-  //
-  // first we need the database name, and then let's 
-  // try to open it:
-  //
-  char database[DATABASE_MAX_ID_LENGTH+1];  // +1 for null terminator
+      // checks the datatype in the column
+      if (columns[j].colType == 1){
+        strcpy(colType, "int");
+      }
+      else if (columns[j].colType == 2){
+        strcpy(colType, "real");
+      }
+      else if (columns[j].colType == 3){
+        strcpy(colType, "string");
+      }
 
+      // checks the index type of the column 
+      if (columns[j].indexType == 0){
+        strcpy(indexType, "non-indexed");
+      }
+      else if (columns[j].indexType == 1){
+        strcpy(indexType, "indexed");
+      }
+      else if (columns[j].indexType == 2){
+        strcpy(indexType, "unique indexed");
+      }
+      
+      printf("  Column: %s, %s, %s\n", columns[j].name, colType, indexType);
+    }
+  }
+  
+  printf("**END OF DATABASE SCHEMA**\n");
+}
+
+int main(){
+  char database[DATABASE_MAX_ID_LENGTH+1];
   printf("database? ");
-  scanf("%s", database);
+  scanf("%s", database); // takes in the user input of the name of the database
 
-  db = database_open(database);
-
-  //
-  // Did the database open successfully?
-  //
-  if (db == NULL) // no
-  {
-    printf("**Error: unable to open database '%s'\n", database);
+  struct Database *open_database = database_open(database); // open the database
+  
+  if(open_database == NULL){
+    printf("**Error: unable to open database ‘%s’\n", database);
     exit(-1);
   }
 
-  //
-  // print the schema:
-  //
-  //print_schema(db);
+  print_schema(open_database); // prints out a representation of the dataabse
 
-  //
-  // now let's start parsing and analyzing each query:
-  //
-  parser_init();
+  parser_init(); // initializes the pareser
 
-  while (true)
-  {
+  // loops until errors or the user exits 
+  while(true){
     printf("query? ");
+    struct TokenQueue* tq = parser_parse(stdin); // parses through the inputs and gets a token queue
 
-    struct TokenQueue* tokens = NULL;
-
-    //
-	// first we check for syntax errors / EOF:
-	//
-    tokens = parser_parse(stdin);
-
-    if (tokens == NULL)
-    {
-      //
-      // EOF, or syntax error (error msg already output by parser if so):
-      //
-      if (parser_eof())
-        break;
-      else  // syntax error, loop around and try another query;
-        continue;
+    if(tq == NULL){
+      if(parser_eof()){
+        break; 
+      }
     }
-    else // successful parse:
-    {
-      //
-      // analyze the query for semantic errors, and build AST if successful:
-      //
-      struct QUERY* query = NULL;
-
-      query = analyzer_build(db, tokens);
-	  
-	    tokenqueue_destroy(tokens);  // done with the tokens, free memory:
-
-      if (query == NULL)  // semantic error, msg already output
-      {
-        //
-        // nothing to do, ignore and loop around and try again:
-        //
-        continue;
+    else{
+      struct QUERY* query = analyzer_build(open_database, tq); // analyzes the token queue to create a query
+      if (query != NULL){
+        print_ast(query); // prints the represetnation of the abstract syntax tree of the query
+        
+        execute_query(query, open_database); // prints the first 5 lines of the data from the table
       }
-      else
-      {
-        //
-        // print AST and output first 5 lines of the table
-        // given in the FROM clause of the query:
-        //
-        //print_ast(query);
-
-        execute_query(db, query);
-      }
-    }//else
-  }//while
-
-  //
-  // done!
-  //
-  database_close(db);
+    }
+  }
+  
+  database_close(open_database);
   
   return 0;
 }
